@@ -28,6 +28,8 @@ import tempfile
 
 from aiohttp import web
 import marshmallow
+import marshmallow.utils
+import webargs.core
 from webargs import fields
 
 from oslo_config import cfg
@@ -333,7 +335,58 @@ class ModelWrapper(object):
                 args = self._convert_old_args(args)
             except (NotImplementedError, AttributeError):
                 args = {}
-        return args
+        return self._args_to_schemas(args)
+
+    @staticmethod
+    def _args_to_schemas(args):
+        """Transform from argument dictionaries to webargs schemas.
+
+        This method receives a dictionary whose elements are webargs.Fields and
+        returns a list of schemas, grouped by location, so that these fields
+        can be populated into the API using the correct use_args and use_kwargs
+        methods.
+
+        We cannot simply return a single dictionary due to the breaking change
+        introduced in webargs version 6.0.0 that removed the support for
+        defining locations inse the individual fields:
+        https://webargs.readthedocs.io/en/latest/changelog.html#b1-2020-01-06
+        """
+        # Available locati
+        locations = {
+            "query": {},
+            "json": {},
+            "form": {},
+            "headers": {},
+            "cookies": {},
+            "files": {},
+        }
+
+        for name, arg in args.items():
+            if getattr(arg, "location", None):
+                if arg.location in ["query", "querystring"]:
+                    locations["query"][name] = arg
+                else:
+                    locations[arg.location][name] = arg
+            elif name == "accept":  # PEBKAC but we need to handle it
+                locations["headers"][name] = arg
+            else:
+                locations["query"][name] = arg
+
+        accept = locations["headers"].get("accept", None)
+        if accept:
+            accept.validate.choices.append("*/*")
+            # If no default value use first possible choice:
+            if isinstance(accept.missing, marshmallow.utils._Missing):
+                accept.missing = accept.validate.choices[0]
+
+        import pprint
+        pprint.pprint(locations)
+        schemas = {}
+        for l, d in locations.items():
+            s = webargs.core.dict2schema(d)
+            s.opts.ordered = True
+            schemas[l] = s
+        return schemas
 
     def _convert_old_args(self, args):
         aux = {}

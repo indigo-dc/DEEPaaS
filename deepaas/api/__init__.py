@@ -120,5 +120,6 @@ async def get_app(swagger=True, doc="/ui", prefix="",
             static_path=static_path,
             in_place=True,
         )
+        APP.middlewares.append(aiohttp_apispec.validation_middleware)
 
     return APP
